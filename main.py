@@ -1,77 +1,62 @@
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    confusion_matrix
-)
+# imports
 
-from fastapi import FastAPI
-import pandas as pd
-import joblib
+## fastapi
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+## services
+from services.load_model import MODELS
+from services.predict import make_predictions
+from services.sample_data import take_one_sample
+
+## pydantic
+from pydantic import BaseModel
+
+
+# type class
+class PredictionInput(BaseModel):
+    data: list[dict] | dict
+
+# app
 app = FastAPI()
 
-# Load model once (IMPORTANT)
-model = joblib.load("breast_cancer_cls_v1.pkl")
-
-# Load dataset
-df_test = pd.read_csv("breast-cancer-test.csv")
-# Load evaluation data
-y_test = pd.read_csv("breast-cancer-y-test.csv").squeeze()
-y_pred = pd.read_csv("breast-cancer-y-pred.csv").squeeze()
-y_prob = pd.read_csv("breast-cancer-y-prob.csv").squeeze()
-
-# CORS middleware
+# middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # later restrict
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# get routes
+
+## home
 @app.get("/")
 def home():
-    return {"message": "API running"}
+    return {"message": "codeSarv API is running."}
 
-@app.get("/predict")
-def predict():
-    # randomly sample 1 row
-    sample = df_test.sample(n=1)
+## pick data
+@app.get("/pick-data/{model_name}")
+def pick_data(model_name: str):
+    test_data_path = MODELS.get(model_name).get("test_data_path")
+    sample = take_one_sample(test_data_path=test_data_path)
 
-    prediction = model.predict(sample)
+    return {"test_data": sample}
+
+# post routes
+
+## predict dynamically
+@app.post("/predict/{model_name}")
+def predict(model_name: str, payload: PredictionInput):
+    model = MODELS.get(model_name).get("model")
+
+    if not model:
+        raise HTTPException(status_code=404, detail="Model not found")
+    
+    prediction = make_predictions(model, payload.data)
 
     return {
-        "input": sample.to_dict(orient="records")[0],
-        "prediction": prediction.tolist()
+        "model": model_name,
+        "prediction": prediction
     }
-
-@app.get("/performance")
-def performance():
-    try:
-        # Core metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        precision = precision_score(y_test, y_pred)
-        recall = recall_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred)
-
-        # ROC-AUC (requires probabilities)
-        roc_auc = roc_auc_score(y_test, y_prob)
-
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_pred).tolist()
-
-        return {
-            "accuracy": round(accuracy, 4),
-            "precision": round(precision, 4),
-            "recall": round(recall, 4),
-            "f1_score": round(f1, 4),
-            "roc_auc": round(roc_auc, 4),
-            "confusion_matrix": cm
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
